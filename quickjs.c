@@ -14975,7 +14975,7 @@ const void * const * active_dispatch_table = caller_ctx->rt->debugger_info.trans
         int call_argc;
         JSValue *call_argv;
 
-        js_debugger_check(ctx, NULL);
+        js_debugger_check(ctx, pc);
 
         SWITCH(pc) {
         CASE(OP_push_i32):
@@ -55934,8 +55934,14 @@ JSDebuggerLocation js_debugger_current_location(JSContext *ctx, const uint8_t *c
     if (!b)
         return location;
 
-    location.line = find_line_num(ctx, b, (cur_pc ? cur_pc : sf->cur_pc) - b->byte_code_buf - 1, &location.column);
+    if (cur_pc != b->byte_code_buf) {
+        location.line = find_line_num(ctx, b, cur_pc - b->byte_code_buf - 1, &location.column);
+    } else {
+        location.line = b->line_num;
+    }
     location.filename = b->filename;
+    location.column = 0; // FIXME: this is supported now, but causes breakpoints to fire multiple times
+ 
     return location;
 }
 
@@ -55982,7 +55988,13 @@ JSValue js_debugger_build_backtrace(JSContext *ctx, const uint8_t *cur_pc)
 
             b = p->u.func.function_bytecode;
             const uint8_t *pc = sf != ctx->rt->current_stack_frame || !cur_pc ? sf->cur_pc : cur_pc;
-            line_num1 = find_line_num(ctx, b, pc - b->byte_code_buf - 1, &col);
+            if (cur_pc == NULL && sf->cur_pc == NULL) {
+                line_num1 = b->line_num;
+            } else if (pc == b->byte_code_buf) {
+                line_num1 = b->line_num;
+            } else {
+                line_num1 = find_line_num(ctx, b, pc - b->byte_code_buf, &col);
+            }
             JS_SetPropertyStr(ctx, current_frame, "filename", JS_AtomToString(ctx, b->filename));
             if (line_num1 != -1)
                 JS_SetPropertyStr(ctx, current_frame, "line", JS_NewUint32(ctx, line_num1));
@@ -56092,12 +56104,16 @@ int js_debugger_check_breakpoint(JSContext *ctx, uint32_t current_dirty, const u
                     pc += (op / PC2LINE_RANGE);
                     new_line_num = line_num + (op % PC2LINE_RANGE) + PC2LINE_BASE;
                 }
+                ret = get_sleb128(&v, p, p_end);
+                if (ret < 0) goto fail;
+                p += ret;
                 line_num = new_line_num;
             }
 
-            if (line_num != last_line_num) {
+            // line changed or we hit the end
+            if (line_num != last_line_num || p >= p_end) {
                 // new line found, check if it is the one with breakpoint.
-                if (last_line_num == breakpoint_line && line_num > last_line_num)
+                if (last_line_num == breakpoint_line)
                     memset(b->debugger.breakpoints + line_pc, 1, pc - line_pc);
 
                 // update the line trackers
