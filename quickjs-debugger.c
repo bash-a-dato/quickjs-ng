@@ -415,13 +415,27 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
 #endif
 
     JSValue path_data = JS_GetPropertyStr(ctx, info->breakpoints, path);
-
-    if (!JS_IsUndefined(path_data))
+    
+    printf("[DEBUG] js_process_breakpoints: processing path: %s\n", path);
+    
+    if (!JS_IsUndefined(path_data)) {
+        printf("[DEBUG] js_process_breakpoints: found existing path_data, freeing it\n");
         JS_FreeValue(ctx, path_data);
+    }
     // use an object to store the breakpoints as a sparse array, basically.
     // this will get resolved into a pc array mirror when its detected as dirty.
     path_data = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, info->breakpoints, path, path_data);
+    printf("[DEBUG] js_process_breakpoints: created new path_data object for path: %s\n", path);
+    
+    // Also index by basename to support runtimes that report only the filename
+    // (eg. when qjs is invoked with a relative path like "test.js").
+    const char *basename = strrchr(path, '/');
+    basename = basename ? (basename + 1) : path;
+    if (basename && *basename) {
+        printf("[DEBUG] js_process_breakpoints: also indexing by basename: %s\n", basename);
+        JS_SetPropertyStr(ctx, info->breakpoints, basename, JS_DupValue(ctx, path_data));
+    }
     JS_FreeCString(ctx, path_orig);
 #ifdef _WIN32
     js_free(ctx, path);
@@ -429,6 +443,29 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
     JS_FreeValue(ctx, path_property);
 
     JSValue breakpoints = JS_GetPropertyStr(ctx, message, "breakpoints");
+    
+    // Debug: log the breakpoints being set
+    if (JS_IsArray(ctx, breakpoints)) {
+        JSValue length_val = JS_GetPropertyStr(ctx, breakpoints, "length");
+        uint32_t length;
+        JS_ToUint32(ctx, &length, length_val);
+        JS_FreeValue(ctx, length_val);
+        
+        printf("[DEBUG] js_process_breakpoints: setting %u breakpoints for path %s\n", length, path);
+        for (uint32_t i = 0; i < length; i++) {
+            JSValue bp = JS_GetPropertyUint32(ctx, breakpoints, i);
+            JSValue line_val = JS_GetPropertyStr(ctx, bp, "line");
+            JSValue col_val = JS_GetPropertyStr(ctx, bp, "column");
+            int line, column;
+            JS_ToInt32(ctx, &line, line_val);
+            JS_ToInt32(ctx, &column, col_val);
+            printf("[DEBUG] js_process_breakpoints: breakpoint %u at line %d, column %d\n", i, line, column);
+            JS_FreeValue(ctx, line_val);
+            JS_FreeValue(ctx, col_val);
+            JS_FreeValue(ctx, bp);
+        }
+    }
+    
     JS_SetPropertyStr(ctx, path_data, "breakpoints", breakpoints);
     JS_SetPropertyStr(ctx, path_data, "dirty", JS_NewInt32(ctx, info->breakpoints_dirty_counter));
 
@@ -437,7 +474,38 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
 
 JSValue js_debugger_file_breakpoints(JSContext *ctx, const char* path) {
     JSDebuggerInfo *info = js_debugger_info(JS_GetRuntime(ctx));
+    
+    printf("[DEBUG] js_debugger_file_breakpoints: looking for breakpoints for path: %s\n", path ? path : "NULL");
+    
+    // First try the full path
     JSValue path_data = JS_GetPropertyStr(ctx, info->breakpoints, path);
+    if (!JS_IsUndefined(path_data)) {
+        printf("[DEBUG] js_debugger_file_breakpoints: found breakpoints for full path: %s\n", path);
+        return path_data;
+    }
+    
+    // If not found, try just the filename (basename)
+    const char *basename = strrchr(path, '/');
+    if (!basename) {
+        basename = strrchr(path, '\\'); // Windows path separator
+    }
+    basename = basename ? (basename + 1) : path;
+    
+    printf("[DEBUG] js_debugger_file_breakpoints: trying basename: %s\n", basename ? basename : "NULL");
+    
+    if (basename && *basename) {
+        path_data = JS_GetPropertyStr(ctx, info->breakpoints, basename);
+        if (!JS_IsUndefined(path_data)) {
+            printf("[DEBUG] js_debugger_file_breakpoints: found breakpoints for basename: %s\n", basename);
+        } else {
+            printf("[DEBUG] js_debugger_file_breakpoints: no breakpoints found for basename: %s\n", basename);
+        }
+    }
+    
+    if (JS_IsUndefined(path_data)) {
+        printf("[DEBUG] js_debugger_file_breakpoints: no breakpoints found for path: %s\n", path);
+    }
+    
     return path_data;    
 }
 
@@ -558,51 +626,93 @@ void js_debugger_free_context(JSContext *ctx) {
 // in thread check request/response of pending commands.
 // todo: background thread that reads the socket.
 void js_debugger_check(JSContext* ctx, const uint8_t *cur_pc) {
-
     JSDebuggerInfo *info = js_debugger_info(JS_GetRuntime(ctx));
-    if (info->is_debugging)
+    
+    // Add debug logging for every call during execution
+    static int call_counter = 0;
+    call_counter++;
+    
+    if (info->is_debugging) {
+        // Only print debug message occasionally to avoid spam
+        static int debug_counter = 0;
+        if (debug_counter++ % 1000 == 0) {
+            printf("[DEBUG] Already debugging, call #%d\n", debug_counter);
+        }
         return;
-    if (info->debugging_ctx == ctx)
+    }
+    if (info->debugging_ctx == ctx) {
+        printf("[DEBUG] js_debugger_check call #%d - debugging_ctx matches, returning early\n", call_counter);
         return;
+    }
+    
+    // Prevent infinite reconnection attempts
+    if (info->attempted_connect && info->attempted_wait) {
+        printf("[DEBUG] js_debugger_check call #%d - connection attempts exhausted, returning\n", call_counter);
+        return;
+    }
+    
+    printf("[DEBUG] js_debugger_check call #%d - setting up debugging context\n", call_counter);
     info->is_debugging = 1;
     info->ctx = ctx;
 
     if (!info->attempted_connect) {
         info->attempted_connect = 1;
         char *address = getenv("QUICKJS_DEBUG_ADDRESS");
-        if (address != NULL && !info->transport_close)
+        printf("address: %s\n", address);
+        if (address != NULL && !info->transport_close) {
+            printf("js_debugger_connect\n");
             js_debugger_connect(ctx, address);
+            printf("js_debugger_connect done\n");
+        }
     }
     else if (!info->attempted_wait) {
         info->attempted_wait = 1;
         char *address = getenv("QUICKJS_DEBUG_LISTEN_ADDRESS");
-        if (address != NULL && !info->transport_close)
+        printf("address: %s\n", address);
+        if (address != NULL && !info->transport_close) {
+            printf("js_debugger_wait_connection\n");
             js_debugger_wait_connection(ctx, address);
+            printf("js_debugger_wait_connection done\n");
+        }
     }
 
-    if (info->transport_close == NULL)
+    if (info->transport_close == NULL) {
+        printf("[DEBUG] js_debugger_check call #%d - no transport connection, going to done\n", call_counter);
         goto done;
+    }
 
     struct JSDebuggerLocation location;
     int depth;
+
+    // Get current location for debugging
+    location = js_debugger_current_location(ctx, cur_pc);
+    printf("[DEBUG] js_debugger_check call #%d - current location: file=%s, line=%d, column=%d\n", 
+           call_counter, location.filename ? location.filename : "NULL", location.line, location.column);
 
     // perform stepping checks prior to the breakpoint check
     // as those need to preempt breakpoint behavior to skip their last
     // position, which may be a breakpoint.
     if (info->stepping) {
+        printf("[DEBUG] js_debugger_check call #%d - stepping mode active\n", call_counter);
         // all step operations need to ignore their step location, as those
         // may be on a breakpoint.
-        location = js_debugger_current_location(ctx, cur_pc);
         depth = js_debugger_stack_depth(ctx);
         if (info->step_depth == depth
             && location.filename == info->step_over.filename
             && location.line == info->step_over.line
-            && location.column == info->step_over.column)
+            && location.column == info->step_over.column) {
+            printf("[DEBUG] js_debugger_check call #%d - stepping: same location, skipping\n", call_counter);
             goto done;
+        }
     }
 
+    printf("[DEBUG] js_debugger_check call #%d - checking for breakpoint at %s:%d:%d\n", 
+           call_counter, location.filename ? location.filename : "NULL", location.line, location.column);
     int at_breakpoint = js_debugger_check_breakpoint(ctx, info->breakpoints_dirty_counter, cur_pc);
+    printf("[DEBUG] js_debugger_check call #%d - breakpoint check result: %d\n", call_counter, at_breakpoint);
+    
     if (at_breakpoint) {
+        printf("[DEBUG] js_debugger_check call #%d - BREAKPOINT HIT! Stopping execution\n", call_counter);
         // reaching a breakpoint resets any existing stepping.
         info->stepping = 0;
         info->is_paused = 1;

@@ -204,7 +204,15 @@ set(qjs_sources
     libregexp.c
     libunicode.c
     quickjs.c
+    quickjs-debugger.c
 )
+
+# Add platform-specific debugger transport
+if(WIN32)
+    list(APPEND qjs_sources quickjs-debugger-transport-win.c)
+else()
+    list(APPEND qjs_sources quickjs-debugger-transport-unix.c)
+endif()
 
 if(QJS_BUILD_LIBC)
     list(APPEND qjs_sources quickjs-libc.c)
@@ -212,6 +220,7 @@ endif()
 list(APPEND qjs_defines _GNU_SOURCE)
 if(WIN32)
     list(APPEND qjs_defines WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0602)
+    list(APPEND qjs_libs ws2_32)
 endif()
 list(APPEND qjs_libs ${CMAKE_DL_LIBS})
 find_package(Threads)

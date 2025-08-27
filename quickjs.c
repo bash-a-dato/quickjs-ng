@@ -56007,43 +56007,65 @@ JSValue js_debugger_build_backtrace(JSContext *ctx, const uint8_t *cur_pc)
 }
 
 int js_debugger_check_breakpoint(JSContext *ctx, uint32_t current_dirty, const uint8_t *cur_pc) {
+    printf("[DEBUG] js_debugger_check_breakpoint: called with current_dirty=%u\n", current_dirty);
+    
     JSValue path_data = JS_UNDEFINED;
-    if (!ctx->rt->current_stack_frame)
+    if (!ctx->rt->current_stack_frame) {
+        printf("[DEBUG] js_debugger_check_breakpoint: no current_stack_frame, returning 0\n");
         return 0;
+    }
     JSObject *f = JS_VALUE_GET_OBJ(ctx->rt->current_stack_frame->cur_func);
-    if (!f || !js_class_has_bytecode(f->class_id))
+    if (!f || !js_class_has_bytecode(f->class_id)) {
+        printf("[DEBUG] js_debugger_check_breakpoint: no function or not bytecode, returning 0\n");
         return 0;
+    }
     JSFunctionBytecode *b = f->u.func.function_bytecode;
-    if (!b->filename)
+    if (!b->filename) {
+        printf("[DEBUG] js_debugger_check_breakpoint: no filename, returning 0\n");
         return 0;
+    }
 
     // check if up to date
-    if (b->debugger.dirty == current_dirty)
+    printf("[DEBUG] js_debugger_check_breakpoint: checking dirty - b->debugger.dirty=%u, current_dirty=%u\n", 
+           b->debugger.dirty, current_dirty);
+    if (b->debugger.dirty == current_dirty) {
+        printf("[DEBUG] js_debugger_check_breakpoint: already up to date, going to done\n");
         goto done;
+    }
 
     // note the dirty value and mark as up to date
     uint32_t dirty = b->debugger.dirty;
     b->debugger.dirty = current_dirty;
+    printf("[DEBUG] js_debugger_check_breakpoint: updating dirty from %u to %u\n", dirty, current_dirty);
 
     const char *filename = JS_AtomToCString(ctx, b->filename);
+    printf("[DEBUG] js_debugger_check_breakpoint: checking breakpoints for filename: %s\n", filename);
     path_data = js_debugger_file_breakpoints(ctx, filename);
     JS_FreeCString(ctx, filename);
-    if (JS_IsUndefined(path_data))
+    if (JS_IsUndefined(path_data)) {
+        printf("[DEBUG] js_debugger_check_breakpoint: no breakpoints found for file, going to done\n");
         goto done;
+    }
 
     JSValue path_dirty_value = JS_GetPropertyStr(ctx, path_data, "dirty");
     uint32_t path_dirty;
     JS_ToUint32(ctx, &path_dirty, path_dirty_value);
     JS_FreeValue(ctx, path_dirty_value);
+    printf("[DEBUG] js_debugger_check_breakpoint: path_dirty=%u, old_dirty=%u\n", path_dirty, dirty);
     // check the dirty value on this source file specifically
-    if (path_dirty == dirty)
+    if (path_dirty == dirty) {
+        printf("[DEBUG] js_debugger_check_breakpoint: path dirty matches old dirty, going to done\n");
         goto done;
+    }
 
     // todo: bit field?
     // clear/alloc breakpoints
-    if (!b->debugger.breakpoints)
+    if (!b->debugger.breakpoints) {
+        printf("[DEBUG] js_debugger_check_breakpoint: allocating breakpoints array of size %zu\n", b->byte_code_len);
         b->debugger.breakpoints = js_malloc_rt(ctx->rt, b->byte_code_len);
+    }
     memset(b->debugger.breakpoints, 0, b->byte_code_len);
+    printf("[DEBUG] js_debugger_check_breakpoint: cleared breakpoints array\n");
 
     JSValue breakpoints = JS_GetPropertyStr(ctx, path_data, "breakpoints");
 
@@ -56051,6 +56073,7 @@ int js_debugger_check_breakpoint(JSContext *ctx, uint32_t current_dirty, const u
     uint32_t breakpoints_length;
     JS_ToUint32(ctx, &breakpoints_length, breakpoints_length_property);
     JS_FreeValue(ctx, breakpoints_length_property);
+    printf("[DEBUG] js_debugger_check_breakpoint: processing %u breakpoints\n", breakpoints_length);
 
     const uint8_t *p_end, *p;
     int new_line_num, line_num, pc, v, ret;
@@ -56068,6 +56091,8 @@ int js_debugger_check_breakpoint(JSContext *ctx, uint32_t current_dirty, const u
         JS_ToUint32(ctx, &breakpoint_line, breakpoint_line_prop);
         JS_FreeValue(ctx, breakpoint_line_prop);
         JS_FreeValue(ctx, breakpoint);
+        
+        printf("[DEBUG] js_debugger_check_breakpoint: processing breakpoint %u at line %u\n", i, breakpoint_line);
 
         // breakpoint is before the current line.
         // todo: this may be an invalid breakpoint if it's inside the function, but got
@@ -56113,8 +56138,11 @@ int js_debugger_check_breakpoint(JSContext *ctx, uint32_t current_dirty, const u
             // line changed or we hit the end
             if (line_num != last_line_num || p >= p_end) {
                 // new line found, check if it is the one with breakpoint.
-                if (last_line_num == breakpoint_line)
+                if (last_line_num == breakpoint_line) {
+                    printf("[DEBUG] js_debugger_check_breakpoint: SETTING BREAKPOINT at line %d, pc range %d-%d\n", 
+                           last_line_num, line_pc, pc - 1);
                     memset(b->debugger.breakpoints + line_pc, 1, pc - line_pc);
+                }
 
                 // update the line trackers
                 line_pc = pc;
@@ -56132,13 +56160,20 @@ fail:
 done:
     JS_FreeValue(ctx, path_data);
 
-    if (!b->debugger.breakpoints)
+    if (!b->debugger.breakpoints) {
+        printf("[DEBUG] js_debugger_check_breakpoint: no breakpoints array, returning 0\n");
         return 0;
+    }
 
     pc = (cur_pc ? cur_pc : ctx->rt->current_stack_frame->cur_pc) - b->byte_code_buf - 1;
-    if (pc < 0 || pc > b->byte_code_len)
+    printf("[DEBUG] js_debugger_check_breakpoint: calculated pc=%d, byte_code_len=%zu\n", pc, b->byte_code_len);
+    if (pc < 0 || pc > b->byte_code_len) {
+        printf("[DEBUG] js_debugger_check_breakpoint: pc out of range, returning 0\n");
         return 0;
-    return b->debugger.breakpoints[pc];
+    }
+    int breakpoint_result = b->debugger.breakpoints[pc];
+    printf("[DEBUG] js_debugger_check_breakpoint: breakpoint at pc %d = %d\n", pc, breakpoint_result);
+    return breakpoint_result;
 }
 
 JSValue js_debugger_local_variables(JSContext *ctx, int stack_index) {
