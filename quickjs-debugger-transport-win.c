@@ -82,6 +82,7 @@ static void js_transport_close(JSContext *ctx, void *udata)
   struct js_transport_data *data = (struct js_transport_data *)udata;
   if (data->handle <= 0) return;
 
+  return;
   close(data->handle);
   data->handle = 0;
 

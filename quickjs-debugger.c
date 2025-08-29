@@ -399,21 +399,24 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
 
     JSValue path_property = JS_GetPropertyStr(ctx, message, "path");
     const char *path_orig = JS_ToCString(ctx, path_property);
+    printf("DEBUG: js_process_breakpoints - original path: '%s'\n", path_orig);
     char *path;
 
 #ifdef _WIN32
-    // path separators need to be switched to / otherwise path normalization breaks
+    // Normalize path separators and case for consistent storage
     path = js_malloc(ctx, strlen(path_orig) + 1);
     strncpy(path, path_orig, strlen(path_orig) + 1);
-    char *c = path;
-    while (*c) {
-      if (*c == '\\') *c = '/';
-      c++;
+    
+    // Convert backslashes to forward slashes and convert to lowercase
+    for (char *c = path; *c; c++) {
+        if (*c == '\\') *c = '/';  // Convert backslashes to forward slashes
+        else if (*c >= 'A' && *c <= 'Z') *c = *c + 32;  // Convert to lowercase
     }
 #else
-    path = path_orig;
+    path = (char*)path_orig;
 #endif
 
+    printf("DEBUG: js_process_breakpoints - normalized path: '%s'\n", path);
     JSValue path_data = JS_GetPropertyStr(ctx, info->breakpoints, path);
 
     if (!JS_IsUndefined(path_data))
@@ -422,6 +425,7 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
     // this will get resolved into a pc array mirror when its detected as dirty.
     path_data = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, info->breakpoints, path, path_data);
+    printf("DEBUG: js_process_breakpoints - stored breakpoint data for path: '%s'\n", path);
     JS_FreeCString(ctx, path_orig);
 #ifdef _WIN32
     js_free(ctx, path);
@@ -435,9 +439,47 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
     JS_FreeValue(ctx, message);
 }
 
-JSValue js_debugger_file_breakpoints(JSContext *ctx, const char* path) {
+JSValue js_debugger_file_breakpoints(JSContext *ctx, const char* path_orig) {
     JSDebuggerInfo *info = js_debugger_info(JS_GetRuntime(ctx));
+    printf("DEBUG: js_debugger_file_breakpoints - original lookup path: '%s'\n", path_orig);
+    
+    char *path;
+#ifdef _WIN32
+    // Normalize path separators and case to match how breakpoints are stored
+    path = js_malloc(ctx, strlen(path_orig) + 1);
+    strncpy(path, path_orig, strlen(path_orig) + 1);
+    
+    // Convert to lowercase for consistency
+    for (char *c = path; *c; c++) {
+        if (*c == '\\') *c = '/';  // Convert backslashes to forward slashes
+        else if (*c >= 'A' && *c <= 'Z') *c = *c + 32;  // Convert to lowercase
+    }
+#else
+    path = (char*)path_orig;
+#endif
+    
+    printf("DEBUG: js_debugger_file_breakpoints - normalized lookup path: '%s'\n", path);
+    
+    // Debug: List all stored paths
+    JSPropertyEnum *tab_atom;
+    uint32_t tab_atom_count;
+    if (!JS_GetOwnPropertyNames(ctx, &tab_atom, &tab_atom_count, info->breakpoints, JS_GPN_STRING_MASK)) {
+        printf("DEBUG: stored breakpoint paths:\n");
+        for(uint32_t i = 0; i < tab_atom_count; i++) {
+            const char *stored_path = JS_AtomToCString(ctx, tab_atom[i].atom);
+            printf("  [%u]: '%s'\n", i, stored_path);
+            JS_FreeCString(ctx, stored_path);
+        }
+        js_free_prop_enum(ctx, tab_atom, tab_atom_count);
+    }
+    
     JSValue path_data = JS_GetPropertyStr(ctx, info->breakpoints, path);
+    printf("DEBUG: js_debugger_file_breakpoints - result is undefined: %s\n", JS_IsUndefined(path_data) ? "YES" : "NO");
+    
+#ifdef _WIN32
+    js_free(ctx, path);
+#endif
+    
     return path_data;    
 }
 
@@ -566,6 +608,11 @@ void js_debugger_check(JSContext* ctx, const uint8_t *cur_pc) {
         return;
     info->is_debugging = 1;
     info->ctx = ctx;
+    
+    static int call_count = 0;
+    if (++call_count % 1000 == 0) {
+        printf("DEBUG: js_debugger_check called %d times\n", call_count);
+    }
 
     if (!info->attempted_connect) {
         info->attempted_connect = 1;

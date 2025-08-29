@@ -56026,10 +56026,13 @@ int js_debugger_check_breakpoint(JSContext *ctx, uint32_t current_dirty, const u
     b->debugger.dirty = current_dirty;
 
     const char *filename = JS_AtomToCString(ctx, b->filename);
+    printf("DEBUG: js_debugger_check_breakpoint - checking filename: '%s'\n", filename);
     path_data = js_debugger_file_breakpoints(ctx, filename);
     JS_FreeCString(ctx, filename);
-    if (JS_IsUndefined(path_data))
+    if (JS_IsUndefined(path_data)) {
+        printf("DEBUG: js_debugger_check_breakpoint - no breakpoints found for this file\n");
         goto done;
+    }
 
     JSValue path_dirty_value = JS_GetPropertyStr(ctx, path_data, "dirty");
     uint32_t path_dirty;

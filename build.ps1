@@ -28,7 +28,7 @@ function Show-Help {
     Write-Host "  -Examples            Build examples"
     Write-Host "  -Static              Build static executable"
     Write-Host "  -Debug               Build in Debug mode (shortcut for -BuildType Debug)"
-    Write-Host "  -Fast                Skip CMake configure step (build only)"
+    Write-Host "  -Fast                Skip CMake configure step and force rebuild all C files"
     Write-Host "  -Help                Show this help message"
     Write-Host ""
     Write-Host "Examples:" -ForegroundColor Yellow
@@ -36,7 +36,7 @@ function Show-Help {
     Write-Host "  .\build.ps1 -Debug             # Build Debug version"
     Write-Host "  .\build.ps1 -Rebuild           # Clean rebuild"
     Write-Host "  .\build.ps1 -Examples -Static  # Build with examples and static linking"
-    Write-Host "  .\build.ps1 -Fast              # Fast rebuild (skip configure)"
+    Write-Host "  .\build.ps1 -Fast              # Fast rebuild (skip configure, force recompile C files)"
     Write-Host "  .\build.ps1 -Clean             # Clean build directory"
     exit 0
 }
@@ -134,6 +134,12 @@ $BuildArgs = @(
     "-j", [Environment]::ProcessorCount
 )
 
+# Add clean-first option for Fast mode to force recompilation of all C files
+if ($Fast) {
+    $BuildArgs += "--clean-first"
+    Write-Host "Fast mode: Cleaning and rebuilding all source files..." -ForegroundColor Cyan
+}
+
 Write-Host "Running: cmake $($BuildArgs -join ' ')" -ForegroundColor Gray
 
 try {
@@ -160,22 +166,21 @@ $OutputDir = if ($Generator -like "*Visual Studio*") {
 
 $Executables = @("qjs.exe", "qjsc.exe", "run-test262.exe", "interrupt-test.exe", "function_source.exe")
 
-foreach ($exe in $Executables) {
-    $exePath = Join-Path $OutputDir $exe
-    if (Test-Path $exePath) {
-        $fileInfo = Get-Item $exePath
-        Write-Host "✓ $exe" -ForegroundColor Green -NoNewline
-        Write-Host " ($([math]::Round($fileInfo.Length / 1KB, 1)) KB)" -ForegroundColor Gray
-    }
-}
+# foreach ($exe in $Executables) {
+#     $exePath = Join-Path $OutputDir $exe
+#     if (Test-Path $exePath) {
+#         $fileInfo = Get-Item $exePath
+#         Write-Host "✓ $exe" -ForegroundColor Green
+#     }
+# }
 
-if ($Examples -and (Test-Path (Join-Path $OutputDir "hello.exe"))) {
-    Write-Host "✓ Examples built" -ForegroundColor Green
-}
+# if ($Examples -and (Test-Path (Join-Path $OutputDir "hello.exe"))) {
+#     Write-Host "✓ Examples built" -ForegroundColor Green
+# }
 
-Write-Host ""
-Write-Host "Executables location: $OutputDir" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Test your build:" -ForegroundColor Yellow
-Write-Host "  $OutputDir\qjs.exe test.js" -ForegroundColor Gray
-Write-Host "  $OutputDir\qjs.exe --help" -ForegroundColor Gray
+# Write-Host ""
+# Write-Host "Executables location: $OutputDir" -ForegroundColor Cyan
+# Write-Host ""
+# Write-Host "Test your build:" -ForegroundColor Yellow
+# Write-Host "  $OutputDir\qjs.exe test.js" -ForegroundColor Gray
+# Write-Host "  $OutputDir\qjs.exe --help" -ForegroundColor Gray
