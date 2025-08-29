@@ -93,15 +93,27 @@ function test_getline()
 function test_popen()
 {
     var str, f, fname = "tmp_file.txt";
-    var content = "hello world";
+    var ta, content = "hello world";
     var cmd = isWin ? "type" : "cat";
 
-    f = std.open(fname, "w");
-    f.puts(content);
-    f.close();
-
-    /* test loadFile */
+    ta = new Uint8Array([...content].map(c => c.charCodeAt(0)));
+    std.writeFile(fname, ta);
     assert(std.loadFile(fname), content);
+    std.writeFile(fname, ta.buffer);
+    assert(std.loadFile(fname), content);
+    std.writeFile(fname, content);
+    assert(std.loadFile(fname), content);
+
+    // popen pipe is unidirectional so mode should
+    // be either read or write but not both
+    let caught = false;
+    try {
+        std.popen(cmd, "rw");
+    } catch (e) {
+        assert(/invalid file mode/.test(e.message));
+        caught = true;
+    }
+    assert(caught);
 
     /* execute shell command */
     f = std.popen(cmd + " " + fname, "r");
@@ -157,7 +169,10 @@ function test_os()
 
     [files, err] = os.readdir(fdir);
     assert(err, 0);
-    assert(files.indexOf(fname) >= 0);
+    assert(files.length >= 3);
+    assert(files.includes(fname));
+    assert(files.includes("."));
+    assert(files.includes(".."));
 
     fdate = 10000;
 
