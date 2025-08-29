@@ -13,3 +13,5 @@ fuzz
 .vscode/
 *.o
 microbench*.txt
+
+debug_sources/

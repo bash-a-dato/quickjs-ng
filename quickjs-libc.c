@@ -23,6 +23,7 @@
  * THE SOFTWARE.
  */
 #include "quickjs.h"
+#include "quickjs-debugger-files-manager.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -478,6 +479,14 @@ uint8_t *js_load_file(JSContext *ctx, size_t *pbuf_len, const char *filename)
     } while (n == sizeof(tmp));
     fclose(f);
     *pbuf_len = len;
+    
+#ifdef CONFIG_DEBUGGER
+    /* Register loaded file with debugger file manager */
+    if (buf && len > 0) {
+        js_debugger_files_pre_load(filename, (const char *)buf, len);
+    }
+#endif
+    
     return buf;
 }
 

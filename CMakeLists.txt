@@ -133,7 +133,11 @@ endmacro()
 
 xoption(BUILD_SHARED_LIBS "Build a shared library" OFF)
 if(BUILD_SHARED_LIBS)
-    message(STATUS "Building a shared library")
+    message(STATUS "Building a shared library (DLL)")
+    # Ensure all symbols are exported for DLL
+    if(WIN32)
+        set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    endif()
 endif()
 
 # note: QJS_ENABLE_TSAN is currently incompatible with the other sanitizers but we
@@ -145,6 +149,7 @@ xoption(QJS_BUILD_CLI_STATIC "Build a static qjs executable" OFF)
 xoption(QJS_BUILD_CLI_WITH_MIMALLOC "Build the qjs executable with mimalloc" OFF)
 xoption(QJS_BUILD_CLI_WITH_STATIC_MIMALLOC "Build the qjs executable with mimalloc (statically linked)" OFF)
 xoption(QJS_DISABLE_PARSER "Disable JS source code parser" OFF)
+xoption(CONFIG_DEBUGGER "Enable debugger support with file manager" ON)
 xoption(QJS_ENABLE_ASAN "Enable AddressSanitizer (ASan)" OFF)
 xoption(QJS_ENABLE_MSAN "Enable MemorySanitizer (MSan)" OFF)
 xoption(QJS_ENABLE_TSAN "Enable ThreadSanitizer (TSan)" OFF)
@@ -231,6 +236,7 @@ set(qjs_sources
     libunicode.c
     quickjs.c
     quickjs-debugger.c
+    quickjs-debugger-files-manager.c
     xsum.c
 )
 
@@ -265,11 +271,27 @@ endif()
 
 add_library(qjs ${qjs_sources})
 target_compile_definitions(qjs PRIVATE ${qjs_defines})
+
+# Add additional definitions for DLL builds
+if(BUILD_SHARED_LIBS AND WIN32)
+    target_compile_definitions(qjs PRIVATE JS_SHARED_LIBRARY)
+    # Set DLL name for Windows
+    set_target_properties(qjs PROPERTIES OUTPUT_NAME "quickjs")
+endif()
+
 target_include_directories(qjs PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_link_libraries(qjs PUBLIC ${qjs_libs})
+
+# Set unique PDB name for the library on Windows with MSVC
+if(MSVC)
+    set_target_properties(qjs PROPERTIES 
+        COMPILE_PDB_NAME "qjs_lib"
+        COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+endif()
 
 if(EMSCRIPTEN)
     add_executable(qjs_wasm ${qjs_sources})
@@ -300,6 +322,12 @@ add_qjs_libc_if_needed(qjsc)
 add_static_if_needed(qjsc)
 target_compile_definitions(qjsc PRIVATE ${qjs_defines})
 target_link_libraries(qjsc qjs)
+# Set unique PDB name for Windows MSVC builds
+if(MSVC)
+    set_target_properties(qjsc PROPERTIES 
+        PDB_NAME "qjsc"
+    )
+endif()
 
 
 # QuickJS CLI
@@ -320,6 +348,12 @@ target_link_libraries(qjs_exe qjs)
 if(NOT WIN32)
     set_target_properties(qjs_exe PROPERTIES ENABLE_EXPORTS TRUE)
 endif()
+# Set unique PDB name for Windows MSVC builds
+if(MSVC)
+    set_target_properties(qjs_exe PROPERTIES 
+        PDB_NAME "qjs_exe"
+    )
+endif()
 if(QJS_BUILD_CLI_WITH_MIMALLOC OR QJS_BUILD_CLI_WITH_STATIC_MIMALLOC)
     find_package(mimalloc REQUIRED)
     # Upstream mimalloc doesn't provide a way to know if both libraries are supported.
@@ -335,11 +369,17 @@ endif()
 
 if(NOT EMSCRIPTEN)
     add_executable(run-test262
-        run-test262.c
+    run-test262.c
+)
+add_qjs_libc_if_needed(run-test262)
+target_compile_definitions(run-test262 PRIVATE ${qjs_defines})
+target_link_libraries(run-test262 qjs)
+# Set unique PDB name for Windows MSVC builds
+if(MSVC)
+    set_target_properties(run-test262 PROPERTIES 
+        PDB_NAME "run-test262"
     )
-    add_qjs_libc_if_needed(run-test262)
-    target_compile_definitions(run-test262 PRIVATE ${qjs_defines})
-    target_link_libraries(run-test262 qjs)
+endif()
 endif()
 
 # Interrupt test
@@ -350,6 +390,12 @@ add_executable(api-test
 )
 target_compile_definitions(api-test PRIVATE ${qjs_defines})
 target_link_libraries(api-test qjs)
+# Set unique PDB name for Windows MSVC builds
+if(MSVC)
+    set_target_properties(api-test PROPERTIES 
+        PDB_NAME "api-test"
+    )
+endif()
 
 # Unicode generator
 #
@@ -368,6 +414,12 @@ add_qjs_libc_if_needed(function_source)
 target_include_directories(function_source PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(function_source PRIVATE ${qjs_defines})
 target_link_libraries(function_source qjs)
+# Set unique PDB name for Windows MSVC builds
+if(MSVC)
+    set_target_properties(function_source PROPERTIES 
+        PDB_NAME "function_source"
+    )
+endif()
 
 # Examples
 #

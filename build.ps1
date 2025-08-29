@@ -10,6 +10,8 @@ param(
     [switch]$Examples,
     [switch]$Static,
     [switch]$Debug,
+    [switch]$Debugger,
+    [switch]$Dll,
     [switch]$Fast,
     [switch]$Help
 )
@@ -28,14 +30,19 @@ function Show-Help {
     Write-Host "  -Examples            Build examples"
     Write-Host "  -Static              Build static executable"
     Write-Host "  -Debug               Build in Debug mode (shortcut for -BuildType Debug)"
+    Write-Host "  -Debugger            Enable debugger support with file manager"
+    Write-Host "  -Dll                 Build shared library (DLL) instead of static library"
     Write-Host "  -Fast                Skip CMake configure step and force rebuild all C files"
     Write-Host "  -Help                Show this help message"
     Write-Host ""
     Write-Host "Examples:" -ForegroundColor Yellow
     Write-Host "  .\build.ps1                    # Build Release version"
-    Write-Host "  .\build.ps1 -Debug             # Build Debug version"
+    Write-Host "  .\build.ps1 -Debug             # Build Debug version with debugger enabled"
     Write-Host "  .\build.ps1 -Rebuild           # Clean rebuild"
     Write-Host "  .\build.ps1 -Examples -Static  # Build with examples and static linking"
+    Write-Host "  .\build.ps1 -Debugger          # Build with debugger file manager enabled"
+    Write-Host "  .\build.ps1 -Dll               # Build shared library (DLL)"
+    Write-Host "  .\build.ps1 -Dll -Debugger     # Build DLL with debugger support"
     Write-Host "  .\build.ps1 -Fast              # Fast rebuild (skip configure, force recompile C files)"
     Write-Host "  .\build.ps1 -Clean             # Clean build directory"
     exit 0
@@ -48,6 +55,8 @@ if ($Help) {
 # Handle Debug shortcut
 if ($Debug) {
     $BuildType = "Debug"
+    # Auto-enable debugger in Debug mode
+    $Debugger = $true
 }
 
 Write-Host "QuickJS Build Script" -ForegroundColor Green
@@ -88,12 +97,30 @@ if ($Static) {
     $CMakeOptions += "-DQJS_BUILD_CLI_STATIC=ON"
 }
 
+if ($Debugger) {
+    $CMakeOptions += "-DCONFIG_DEBUGGER=ON"
+}
+
+if ($Dll) {
+    $CMakeOptions += "-DBUILD_SHARED_LIBS=ON"
+}
+
 # Configure step (skip if Fast mode and build directory exists)
 if (-not $Fast -or -not (Test-Path (Join-Path $BuildDir "CMakeCache.txt"))) {
     Write-Host "Configuring CMake..." -ForegroundColor Yellow
     Write-Host "Build Type: $BuildType" -ForegroundColor Cyan
     Write-Host "Generator: $Generator" -ForegroundColor Cyan
     Write-Host "Architecture: $Architecture" -ForegroundColor Cyan
+    if ($Debugger) {
+        Write-Host "Debugger: Enabled (with file manager)" -ForegroundColor Cyan
+    } else {
+        Write-Host "Debugger: Disabled" -ForegroundColor Cyan
+    }
+    if ($Dll) {
+        Write-Host "Library Type: Shared (DLL)" -ForegroundColor Cyan
+    } else {
+        Write-Host "Library Type: Static" -ForegroundColor Cyan
+    }
 
     $ConfigureArgs = @(
         "-S", ".",

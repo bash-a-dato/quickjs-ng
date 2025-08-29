@@ -47,6 +47,7 @@
 #include "list.h"
 #include "quickjs.h"
 #include "quickjs-debugger.h"
+#include "quickjs-debugger-files-manager.h"
 #include "libregexp.h"
 #include "xsum.h"
 
@@ -35156,6 +35157,31 @@ static JSValue JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
         JS_FreeValueRT(rt, ctx->error_back_trace);
         ctx->error_back_trace = JS_UNDEFINED;
     }
+    
+    /* Register code with debugger file manager for debugging and prefer debug_sources path */
+#ifdef CONFIG_DEBUGGER
+    js_debugger_files_pre_eval(input, input_len, filename, flags);
+    
+    /* For eval code, use the VM filename instead of <input> */
+    if (filename && (strcmp(filename, "<input>") == 0 || 
+                     strcmp(filename, "<evalScript>") == 0 ||
+                     strstr(filename, "<eval") != NULL)) {
+        JSDebuggerFileEntry *current_eval = js_debugger_files_get_current_eval();
+        if (current_eval && current_eval->filename) {
+            filename = current_eval->filename;  /* Use VM#### name */
+            printf("[DEBUG] Using VM filename for runtime: %s\n", filename);
+        }
+    } else {
+        /* For regular files, try to get debug_sources path */
+        const char *dbg_filename = js_debugger_files_ensure_debug_path(js_debugger_files_get_global(),
+                                                                       filename,
+                                                                       ((flags & 0x03) == 1));
+        if (dbg_filename && dbg_filename != filename) {
+            filename = dbg_filename;
+        }
+    }
+#endif
+    
     return ctx->eval_internal(ctx, this_obj, input, input_len, filename, line,
                               flags, scope_idx);
 }
@@ -57955,7 +57981,39 @@ JSValue js_debugger_build_backtrace(JSContext *ctx, const uint8_t *cur_pc)
             } else {
                 line_num1 = find_line_num(ctx, b, pc - b->byte_code_buf, &col);
             }
-            JS_SetPropertyStr(ctx, current_frame, "filename", JS_AtomToString(ctx, b->filename));
+            /* Get the original filename */
+            JSValue original_filename = JS_AtomToString(ctx, b->filename);
+            const char *filename_str = JS_ToCString(ctx, original_filename);
+            
+#ifdef CONFIG_DEBUGGER
+            /* Try to get the debug sources path for the filename */
+            JSDebuggerFileManager *manager = js_debugger_files_get_global();
+            if (manager && filename_str) {
+                const char *debug_path = NULL;
+                
+                /* Handle VM#### filenames */
+                if (strncmp(filename_str, "VM", 2) == 0) {
+                    JSDebuggerFileEntry *entry = js_debugger_files_get_by_filename(manager, filename_str);
+                    if (entry && entry->disk_path) {
+                        debug_path = entry->disk_path;
+                    }
+                } else {
+                    debug_path = js_debugger_files_get_disk_path(manager, filename_str);
+                }
+                
+                if (debug_path) {
+                    JS_FreeValue(ctx, original_filename);
+                    JS_SetPropertyStr(ctx, current_frame, "filename", JS_NewString(ctx, debug_path));
+                } else {
+                    JS_SetPropertyStr(ctx, current_frame, "filename", original_filename);
+                }
+            } else
+#endif
+            {
+                JS_SetPropertyStr(ctx, current_frame, "filename", original_filename);
+            }
+            
+            JS_FreeCString(ctx, filename_str);
             if (line_num1 != -1)
                 JS_SetPropertyStr(ctx, current_frame, "line", JS_NewUint32(ctx, line_num1));
         } else {

@@ -1,4 +1,5 @@
 #include "quickjs-debugger.h"
+#include "quickjs-debugger-files-manager.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -159,7 +160,7 @@ static void js_debugger_get_variable_type(JSContext *ctx,
 static void js_debugger_get_value(JSContext *ctx, JSValue var_val, JSValue var, const char *value_property) {
     // do not toString on Arrays, since that makes a giant string of all the elements.
     // todo: typed arrays?
-    if (JS_IsArray(ctx, var_val)) {
+    if (JS_IsArray(var_val)) {
         JSValue length = JS_GetPropertyStr(ctx, var_val, "length");
         uint32_t len;
         JS_ToUint32(ctx, &len, length);
@@ -213,6 +214,84 @@ static void js_free_prop_enum(JSContext *ctx, JSPropertyEnum *tab, uint32_t len)
             JS_FreeAtom(ctx, tab[i].atom);
         js_free(ctx, tab);
     }
+}
+
+/* Helper function to translate original path to debug_sources path */
+static const char *js_debugger_get_debug_path(JSContext *ctx, const char *original_path) {
+    JSDebuggerFileManager *manager = js_debugger_files_get_global();
+    if (!manager) {
+        return original_path;
+    }
+    
+    /* Check if this is already a debug_sources path */
+    if (strstr(original_path, "debug_sources") != NULL) {
+        printf("[DEBUG] Path already in debug_sources: %s\n", original_path);
+        return original_path;
+    }
+    
+    /* Special case for eval code using <input> filename */
+    if (strcmp(original_path, "<input>") == 0) {
+        JSDebuggerFileEntry *current_eval = js_debugger_files_get_current_eval();
+        if (current_eval && current_eval->disk_path) {
+            printf("[DEBUG] Translated <input> to current eval: %s\n", current_eval->disk_path);
+            return current_eval->disk_path;
+        }
+    }
+    
+    /* Special case for VM#### filenames - find by filename */
+    if (strncmp(original_path, "VM", 2) == 0) {
+        JSDebuggerFileEntry *entry = js_debugger_files_get_by_filename(manager, original_path);
+        if (entry && entry->disk_path) {
+            printf("[DEBUG] Translated VM filename %s to: %s\n", original_path, entry->disk_path);
+            return entry->disk_path;
+        }
+    }
+    
+    const char *debug_path = js_debugger_files_get_disk_path(manager, original_path);
+    if (debug_path) {
+        printf("[DEBUG] Translated path: %s -> %s\n", original_path, debug_path);
+        return debug_path;
+    }
+    
+    printf("[DEBUG] No translation found for: %s\n", original_path);
+    return original_path;
+}
+
+/* Helper function to find VM file for eval code by content */
+static const char *js_debugger_get_vm_path_by_content(JSContext *ctx, const char *content, size_t content_len) {
+    JSDebuggerFileManager *manager = js_debugger_files_get_global();
+    if (!manager || !content) {
+        return NULL;
+    }
+    
+    JSDebuggerFileEntry *entry = js_debugger_files_get_by_content(manager, content, content_len);
+    if (entry && entry->disk_path) {
+        printf("[DEBUG] Found VM file by content: %s\n", entry->disk_path);
+        return entry->disk_path;
+    }
+    
+    return NULL;
+}
+
+/* Helper function to normalize path for consistent storage/lookup */
+static char *js_debugger_normalize_path(JSContext *ctx, const char *path) {
+    if (!path) return NULL;
+    
+    char *normalized = js_malloc(ctx, strlen(path) + 1);
+    if (!normalized) return NULL;
+    
+    strcpy(normalized, path);
+    
+    /* Convert to lowercase and forward slashes for consistency */
+    for (char *c = normalized; *c; c++) {
+        if (*c == '\\') {
+            *c = '/';
+        } else if (*c >= 'A' && *c <= 'Z') {
+            *c = *c + 32; /* Convert to lowercase */
+        }
+    }
+    
+    return normalized;
 }
 
 static uint32_t js_get_property_as_uint32(JSContext *ctx, JSValue obj, const char* property) {
@@ -400,21 +479,12 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
     JSValue path_property = JS_GetPropertyStr(ctx, message, "path");
     const char *path_orig = JS_ToCString(ctx, path_property);
     printf("DEBUG: js_process_breakpoints - original path: '%s'\n", path_orig);
-    char *path;
-
-#ifdef _WIN32
-    // Normalize path separators and case for consistent storage
-    path = js_malloc(ctx, strlen(path_orig) + 1);
-    strncpy(path, path_orig, strlen(path_orig) + 1);
     
-    // Convert backslashes to forward slashes and convert to lowercase
-    for (char *c = path; *c; c++) {
-        if (*c == '\\') *c = '/';  // Convert backslashes to forward slashes
-        else if (*c >= 'A' && *c <= 'Z') *c = *c + 32;  // Convert to lowercase
-    }
-#else
-    path = (char*)path_orig;
-#endif
+    /* Translate to debug_sources path */
+    const char *debug_path = js_debugger_get_debug_path(ctx, path_orig);
+    
+    /* Normalize path for consistent storage */
+    char *path = js_debugger_normalize_path(ctx, debug_path);
 
     printf("DEBUG: js_process_breakpoints - normalized path: '%s'\n", path);
     JSValue path_data = JS_GetPropertyStr(ctx, info->breakpoints, path);
@@ -427,9 +497,7 @@ static void js_process_breakpoints(JSDebuggerInfo *info, JSValue message) {
     JS_SetPropertyStr(ctx, info->breakpoints, path, path_data);
     printf("DEBUG: js_process_breakpoints - stored breakpoint data for path: '%s'\n", path);
     JS_FreeCString(ctx, path_orig);
-#ifdef _WIN32
     js_free(ctx, path);
-#endif
     JS_FreeValue(ctx, path_property);
 
     JSValue breakpoints = JS_GetPropertyStr(ctx, message, "breakpoints");
@@ -443,20 +511,11 @@ JSValue js_debugger_file_breakpoints(JSContext *ctx, const char* path_orig) {
     JSDebuggerInfo *info = js_debugger_info(JS_GetRuntime(ctx));
     printf("DEBUG: js_debugger_file_breakpoints - original lookup path: '%s'\n", path_orig);
     
-    char *path;
-#ifdef _WIN32
-    // Normalize path separators and case to match how breakpoints are stored
-    path = js_malloc(ctx, strlen(path_orig) + 1);
-    strncpy(path, path_orig, strlen(path_orig) + 1);
+    /* Translate to debug_sources path */
+    const char *debug_path = js_debugger_get_debug_path(ctx, path_orig);
     
-    // Convert to lowercase for consistency
-    for (char *c = path; *c; c++) {
-        if (*c == '\\') *c = '/';  // Convert backslashes to forward slashes
-        else if (*c >= 'A' && *c <= 'Z') *c = *c + 32;  // Convert to lowercase
-    }
-#else
-    path = (char*)path_orig;
-#endif
+    /* Normalize path for consistent lookup */
+    char *path = js_debugger_normalize_path(ctx, debug_path);
     
     printf("DEBUG: js_debugger_file_breakpoints - normalized lookup path: '%s'\n", path);
     
@@ -476,9 +535,7 @@ JSValue js_debugger_file_breakpoints(JSContext *ctx, const char* path_orig) {
     JSValue path_data = JS_GetPropertyStr(ctx, info->breakpoints, path);
     printf("DEBUG: js_debugger_file_breakpoints - result is undefined: %s\n", JS_IsUndefined(path_data) ? "YES" : "NO");
     
-#ifdef _WIN32
     js_free(ctx, path);
-#endif
     
     return path_data;    
 }
