@@ -1910,7 +1910,9 @@ static const JSMallocFunctions def_malloc_funcs = {
 
 JSRuntime *JS_NewRuntime(void)
 {
-    return JS_NewRuntime2(&def_malloc_funcs, NULL);
+    JSRuntime *rt = JS_NewRuntime2(&def_malloc_funcs, NULL);
+    printf("JS_NewRuntime called: rt=%p\n", rt);
+    return rt;
 }
 
 void JS_SetMemoryLimit(JSRuntime *rt, size_t limit)
@@ -2092,6 +2094,7 @@ void JS_SetRuntimeInfo(JSRuntime *rt, const char *s)
 
 void JS_FreeRuntime(JSRuntime *rt)
 {
+    printf("JS_FreeRuntime called: rt=%p\n", rt);
     js_debugger_free(rt, &rt->debugger_info);
 
     struct list_head *el, *el1;
@@ -2329,11 +2332,13 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
 
 JSContext *JS_NewContext(JSRuntime *rt)
 {
+    printf("JS_NewContext called: rt=%p\n", rt);
     JSContext *ctx;
 
     ctx = JS_NewContextRaw(rt);
     if (!ctx)
         return NULL;
+    printf("JS_NewContext created: ctx=%p\n", ctx);
 
     JS_AddIntrinsicBaseObjects(ctx);
     JS_AddIntrinsicDate(ctx);
@@ -2459,6 +2464,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
 
 void JS_FreeContext(JSContext *ctx)
 {
+    printf("JS_FreeContext called: ctx=%p\n", ctx);
     JSRuntime *rt = ctx->rt;
     int i;
 
@@ -35245,6 +35251,8 @@ JSValue JS_EvalThis2(JSContext *ctx, JSValueConst this_obj,
 JSValue JS_Eval(JSContext *ctx, const char *input, size_t input_len,
                 const char *filename, int eval_flags)
 {
+    printf("JS_Eval: %s, %s, %d\n", input, filename, eval_flags);
+    
     JSEvalOptions options = {
         .version = JS_EVAL_OPTIONS_VERSION,
         .filename = filename,

@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <time.h>
 
 typedef struct DebuggerSuspendedState {
     uint32_t variable_reference_count;
@@ -24,56 +27,86 @@ static int js_transport_read_fully(JSDebuggerInfo *info, char *buffer, size_t le
 }
 
 static int js_transport_write_fully(JSDebuggerInfo *info, const char *buffer, size_t length) {
+    printf("DEBUG: js_transport_write_fully called with length=%zu\n", length);
     int offset = 0;
     while (offset < length) {
+        printf("DEBUG: writing chunk, offset=%d, remaining=%zu\n", offset, length - offset);
         int sent = info->transport_write(info->transport_udata, buffer + offset, length - offset);
-        if (sent <= 0)
+        printf("DEBUG: transport_write returned: %d\n", sent);
+        if (sent <= 0) {
+            printf("DEBUG: transport_write failed or returned 0\n");
             return 0;
+        }
         offset += sent;
     }
 
+    printf("DEBUG: js_transport_write_fully completed successfully\n");
     return 1;
 }
 
 static int js_transport_write_message_newline(JSDebuggerInfo *info, const char* value, size_t len) {
+    printf("DEBUG: js_transport_write_message_newline called with len=%zu\n", len);
     // length prefix is 8 hex followed by newline = 012345678\n
     // not efficient, but protocol is then human readable.
     char message_length[10];
     message_length[9] = '\0';
     sprintf(message_length, "%08x\n", (int)len + 1);
-    if (!js_transport_write_fully(info, message_length, 9))
+    printf("DEBUG: formatted message length: %s\n", message_length);
+    if (!js_transport_write_fully(info, message_length, 9)) {
+        printf("DEBUG: failed to write message length\n");
         return 0;
+    }
+    printf("DEBUG: wrote message length\n");
     int ret = js_transport_write_fully(info, value, len);
+    printf("DEBUG: wrote message body, ret=%d\n", ret);
     if (!ret)
         return ret;
     char newline[2] = { '\n', '\0' };
-    return js_transport_write_fully(info, newline, 1);
+    ret = js_transport_write_fully(info, newline, 1);
+    printf("DEBUG: wrote newline, ret=%d\n", ret);
+    return ret;
 }
 
 static int js_transport_write_value(JSDebuggerInfo *info, JSValue value) {
+    printf("DEBUG: js_transport_write_value called\n");
     JSValue stringified = JS_JSONStringify(info->ctx, value, JS_UNDEFINED, JS_UNDEFINED);
+    printf("DEBUG: JSON stringified\n");
     size_t len;
     const char* str = JS_ToCStringLen(info->ctx, &len, stringified);
+    printf("DEBUG: converted to C string, len=%zu\n", len);
     int ret = 0;
-    if (len)
+    if (len) {
+        printf("DEBUG: calling js_transport_write_message_newline\n");
         ret = js_transport_write_message_newline(info, str, len);
+        printf("DEBUG: js_transport_write_message_newline returned: %d\n", ret);
+    }
     // else send error somewhere?
+    printf("DEBUG: freeing C string\n");
     JS_FreeCString(info->ctx, str);
+    printf("DEBUG: freeing stringified value\n");
     JS_FreeValue(info->ctx, stringified);
+    printf("DEBUG: freeing original value\n");
     JS_FreeValue(info->ctx, value);
+    printf("DEBUG: js_transport_write_value completed, returning: %d\n", ret);
     return ret;
 }
 
 static JSValue js_transport_new_envelope(JSDebuggerInfo *info, const char *type) {
+    printf("DEBUG: js_transport_new_envelope, info->ctx is %p\n", info->ctx);
     JSValue ret = JS_NewObject(info->ctx);
     JS_SetPropertyStr(info->ctx, ret, "type", JS_NewString(info->ctx, type));
     return ret;
 }
 
 static int js_transport_send_event(JSDebuggerInfo *info, JSValue event) {
+    printf("DEBUG: js_transport_send_event called\n");
     JSValue envelope = js_transport_new_envelope(info, "event");
+    printf("DEBUG: created envelope\n");
     JS_SetPropertyStr(info->ctx, envelope, "event", event);
-    return js_transport_write_value(info, envelope);
+    printf("DEBUG: set event property on envelope\n");
+    int result = js_transport_write_value(info, envelope);
+    printf("DEBUG: js_transport_write_value returned: %d\n", result);
+    return result;
 }
 
 static int js_transport_send_response(JSDebuggerInfo *info, JSValue request, JSValue body) {
@@ -638,12 +671,17 @@ static void js_debugger_context_event(JSContext *caller_ctx, const char *reason)
 
     JSContext *ctx = info->debugging_ctx;
 
+    JSContext *original_ctx = info->ctx;
+    info->ctx = ctx;
+
     JSValue event = JS_NewObject(ctx);
     // better thread id?
     JS_SetPropertyStr(ctx, event, "type", JS_NewString(ctx, "ThreadEvent"));
     JS_SetPropertyStr(ctx, event, "reason", JS_NewString(ctx, reason));
     JS_SetPropertyStr(ctx, event, "thread", JS_NewInt64(ctx, (int64_t)caller_ctx));
     js_transport_send_event(info, event);
+
+    info->ctx = original_ctx;
 }
 
 void js_debugger_new_context(JSContext *ctx) {
@@ -864,4 +902,30 @@ int js_debugger_is_transport_connected(JSRuntime *rt) {
 
 void js_debugger_cooperate(JSContext *ctx) {
     js_debugger_info(JS_GetRuntime(ctx))->should_peek = 1;
+}
+
+// Debugger logging function - writes to debug_sources/logs.txt with timestamp
+int js_debugger_log(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    // Get current timestamp
+    time_t now = time(NULL);
+    struct tm *local_time = localtime(&now);
+    char timestamp[32];
+    strftime(timestamp, sizeof(timestamp), "[%Y-%m-%d %H:%M:%S] ", local_time);
+
+    // Open logs.txt in debug_sources directory for appending
+    FILE *log_file = fopen("debug_sources/logs.txt", "a");
+    if (log_file) {
+        // Write timestamp first
+        fprintf(log_file, "%s", timestamp);
+        // Then write the formatted message
+        vfprintf(log_file, format, args);
+        fclose(log_file);
+    }
+
+    va_end(args);
+
+    return 0;
 }

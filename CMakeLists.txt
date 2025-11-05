@@ -247,7 +247,9 @@ else()
     list(APPEND qjs_sources quickjs-debugger-transport-unix.c)
 endif()
 
-if(QJS_BUILD_LIBC)
+# When building a shared library (DLL), also include quickjs-libc so
+# js_init_module_{std,os,bjson} are exported for embedders.
+if(QJS_BUILD_LIBC OR BUILD_SHARED_LIBS)
     list(APPEND qjs_sources quickjs-libc.c)
 endif()
 list(APPEND qjs_defines _GNU_SOURCE)
@@ -277,6 +279,8 @@ if(BUILD_SHARED_LIBS AND WIN32)
     target_compile_definitions(qjs PRIVATE JS_SHARED_LIBRARY)
     # Set DLL name for Windows
     set_target_properties(qjs PROPERTIES OUTPUT_NAME "quickjs")
+    # Export commonly used QuickJS libc module init symbols from the DLL
+    # (msvc: ensure decorated names are exported by compiling the source in)
 endif()
 
 target_include_directories(qjs PUBLIC

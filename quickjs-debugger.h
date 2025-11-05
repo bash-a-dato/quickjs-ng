@@ -4,6 +4,9 @@
 #include "quickjs.h"
 #include <time.h>
 
+// Debugger logging macro - redirects printf to file logging
+#define printf js_debugger_log
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -74,6 +77,9 @@ int js_debugger_is_transport_connected(JSRuntime* rt);
 
 JSValue js_debugger_file_breakpoints(JSContext *ctx, const char *path);
 void js_debugger_cooperate(JSContext *ctx);
+
+// Debugger logging function
+int js_debugger_log(const char *format, ...);
 
 // begin internal api functions
 // these functions all require access to quickjs internal structures.
