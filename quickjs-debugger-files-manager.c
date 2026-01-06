@@ -1,3 +1,5 @@
+#ifdef CONFIG_DEBUGGER
+
 #include "quickjs-debugger-files-manager.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -640,3 +642,5 @@ void js_debugger_files_set_current_eval(JSDebuggerFileEntry *entry) {
 JSDebuggerFileEntry *js_debugger_files_get_current_eval(void) {
     return g_last_eval_entry;
 }
+
+#endif /* CONFIG_DEBUGGER */

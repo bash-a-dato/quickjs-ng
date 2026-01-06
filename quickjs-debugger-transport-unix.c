@@ -1,3 +1,5 @@
+#ifdef CONFIG_DEBUGGER
+
 #include "quickjs-debugger.h"
 
 #include <sys/socket.h>
@@ -152,3 +154,5 @@ void js_debugger_wait_connection(JSContext *ctx, const char* address) {
     data->handle = client;
     js_debugger_attach(ctx, js_transport_read, js_transport_write, js_transport_peek, js_transport_close, data);
 }
+
+#endif /* CONFIG_DEBUGGER */

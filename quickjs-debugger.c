@@ -1,3 +1,5 @@
+#ifdef CONFIG_DEBUGGER
+
 #include "quickjs-debugger.h"
 #include "quickjs-debugger-files-manager.h"
 #include <stdlib.h>
@@ -929,3 +931,5 @@ int js_debugger_log(const char *format, ...) {
 
     return 0;
 }
+
+#endif /* CONFIG_DEBUGGER */

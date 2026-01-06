@@ -1,3 +1,5 @@
+#ifdef CONFIG_DEBUGGER
+
 #include "quickjs-debugger.h"
 
 #include <assert.h>
@@ -239,3 +241,5 @@ void js_debugger_wait_connection(JSContext* ctx, const char* address) {
     js_debugger_attach(ctx, js_transport_read, js_transport_write, js_transport_peek, js_transport_close, data);
     printf("[DEBUG] js_debugger_wait_connection: js_debugger_attach completed\n");
 }
+
+#endif /* CONFIG_DEBUGGER */

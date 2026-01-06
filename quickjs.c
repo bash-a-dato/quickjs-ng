@@ -46,8 +46,10 @@
 #include "cutils.h"
 #include "list.h"
 #include "quickjs.h"
+#ifdef CONFIG_DEBUGGER
 #include "quickjs-debugger.h"
 #include "quickjs-debugger-files-manager.h"
+#endif
 #include "libregexp.h"
 #include "xsum.h"
 
@@ -322,7 +324,9 @@ struct JSRuntime {
     void *user_opaque;
     void *libc_opaque;
     JSRuntimeFinalizerState *finalizers;
+#ifdef CONFIG_DEBUGGER
     JSDebuggerInfo debugger_info;
+#endif
 };
 
 struct JSClass {
@@ -2095,7 +2099,9 @@ void JS_SetRuntimeInfo(JSRuntime *rt, const char *s)
 void JS_FreeRuntime(JSRuntime *rt)
 {
     printf("JS_FreeRuntime called: rt=%p\n", rt);
+#ifdef CONFIG_DEBUGGER
     js_debugger_free(rt, &rt->debugger_info);
+#endif
 
     struct list_head *el, *el1;
     int i;
@@ -2325,7 +2331,9 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
 
     JS_AddIntrinsicBasicObjects(ctx);
 
+#ifdef CONFIG_DEBUGGER
     js_debugger_new_context(ctx);
+#endif
 
     return ctx;
 }
@@ -2501,7 +2509,9 @@ void JS_FreeContext(JSContext *ctx)
     }
 #endif
 
+#ifdef CONFIG_DEBUGGER
     js_debugger_free_context(ctx);
+#endif
 
     js_free_modules(ctx, JS_FREE_MODULE_ALL);
 
@@ -6590,7 +6600,9 @@ JSValue JS_Throw(JSContext *ctx, JSValue obj)
     JSRuntime *rt = ctx->rt;
     JS_FreeValue(ctx, rt->current_exception);
     rt->current_exception = obj;
+#ifdef CONFIG_DEBUGGER
     js_debugger_exception(ctx);
+#endif
     return JS_EXCEPTION;
 }
 
@@ -16481,7 +16493,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
 #if !DIRECT_DISPATCH
 #define SWITCH(pc)      DUMP_BYTECODE_OR_DONT(pc) switch (opcode = *pc++)
+#ifdef CONFIG_DEBUGGER
 #define CASE(op)        case op: if (caller_ctx->rt->debugger_info.transport_close) js_debugger_check(ctx, pc); stub_ ## op
+#else
+#define CASE(op)        case op: stub_ ## op
+#endif
 #define DEFAULT         default
 #define BREAK           break
 #else
@@ -16492,6 +16508,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         [ OP_COUNT ... 255 ] = &&case_default
     };
     
+#ifdef CONFIG_DEBUGGER
 static const void * const debugger_dispatch_table[256] = {
 #define DEF(id, size, n_pop, n_push, f) && case_debugger_OP_ ## id,
 #define def(id, size, n_pop, n_push, f)
@@ -16505,6 +16522,12 @@ static const void * const debugger_dispatch_table[256] = {
 
 const void * const * active_dispatch_table = caller_ctx->rt->debugger_info.transport_close
     ? debugger_dispatch_table : dispatch_table;
+#else
+#define SWITCH(pc)      DUMP_BYTECODE_OR_DONT(pc) __extension__ ({ goto *dispatch_table[opcode = *pc++]; });
+#define CASE(op)        case_ ## op
+#define DEFAULT         case_default
+#define BREAK           SWITCH(pc)
+#endif
 #endif
 
     if (js_poll_interrupts(caller_ctx))
@@ -16602,7 +16625,9 @@ const void * const * active_dispatch_table = caller_ctx->rt->debugger_info.trans
         int call_argc;
         JSValue *call_argv;
 
+#ifdef CONFIG_DEBUGGER
         js_debugger_check(ctx, pc);
+#endif
 
         SWITCH(pc) {
         CASE(OP_push_i32):
@@ -57911,6 +57936,8 @@ uintptr_t js_std_cmd(int cmd, ...) {
     return rv;
 }
 
+#ifdef CONFIG_DEBUGGER
+
 JSDebuggerLocation js_debugger_current_location(JSContext *ctx, const uint8_t *cur_pc) {
     JSDebuggerLocation location;
     location.filename = 0;
@@ -58361,6 +58388,8 @@ JSValue js_debugger_evaluate(JSContext *ctx, int stack_index, JSValue expression
     }
     return JS_UNDEFINED;
 }
+
+#endif /* CONFIG_DEBUGGER */
 
 #undef malloc
 #undef free

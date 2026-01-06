@@ -155,6 +155,26 @@ xoption(QJS_ENABLE_MSAN "Enable MemorySanitizer (MSan)" OFF)
 xoption(QJS_ENABLE_TSAN "Enable ThreadSanitizer (TSan)" OFF)
 xoption(QJS_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer (UBSan)" OFF)
 
+if(MSVC)
+    xoption(QJS_USE_STATIC_RUNTIME "Link to the MSVC runtime statically" ON)
+    if(QJS_USE_STATIC_RUNTIME)
+        foreach(flag_var
+            CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
+            CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO)
+            if(${flag_var} MATCHES "/MD")
+                string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
+            endif()
+        endforeach()
+        # Also handle CMake 3.15+ CMP0091 if it happens to be set to NEW, though unlikely with min ver 3.10
+        if(POLICY CMP0091)
+            cmake_policy(GET CMP0091 cmp0091_value)
+            if(cmp0091_value STREQUAL "NEW")
+                set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+            endif()
+        endif()
+    endif()
+endif()
+
 if(QJS_ENABLE_ASAN)
 message(STATUS "Building with ASan")
 add_compile_options(
@@ -235,16 +255,21 @@ set(qjs_sources
     libregexp.c
     libunicode.c
     quickjs.c
-    quickjs-debugger.c
-    quickjs-debugger-files-manager.c
     xsum.c
 )
 
-# Add platform-specific debugger transport
-if(WIN32)
-    list(APPEND qjs_sources quickjs-debugger-transport-win.c)
-else()
-    list(APPEND qjs_sources quickjs-debugger-transport-unix.c)
+# Add debugger files only if CONFIG_DEBUGGER is enabled
+if(CONFIG_DEBUGGER)
+    list(APPEND qjs_sources 
+        quickjs-debugger.c
+        quickjs-debugger-files-manager.c
+    )
+    # Add platform-specific debugger transport
+    if(WIN32)
+        list(APPEND qjs_sources quickjs-debugger-transport-win.c)
+    else()
+        list(APPEND qjs_sources quickjs-debugger-transport-unix.c)
+    endif()
 endif()
 
 # When building a shared library (DLL), also include quickjs-libc so
