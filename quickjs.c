@@ -53,6 +53,9 @@
 #include "libregexp.h"
 #include "xsum.h"
 
+/* Forward decls: used before the debug helpers are defined. */
+static void qjs_debug_printf(JSRuntime *rt, const char *fmt, ...);
+
 #if defined(EMSCRIPTEN) || defined(_MSC_VER)
 #define DIRECT_DISPATCH  0
 #else
@@ -279,6 +282,13 @@ struct JSRuntime {
     uintptr_t stack_size; /* in bytes, 0 if no limit */
     uintptr_t stack_top;
     uintptr_t stack_limit; /* lower stack limit */
+
+    /* --- QuickJS debugging instrumentation (call depth + trace) --- */
+    int qjs_call_depth;
+    uint32_t qjs_call_trace_pos;
+    uint32_t qjs_call_trace_count; /* <= 20 */
+    char qjs_last_func[64];
+    char qjs_call_trace[20][64];
 
     JSValue current_exception;
     /* true if inside an out of memory error, to avoid recursing */
@@ -2007,9 +2017,17 @@ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
     JSJobEntry *e;
     JSValue res;
     int i, ret;
+    int pending = 0;
+    struct list_head *el;
+
+    list_for_each(el, &rt->job_list) {
+        pending++;
+    }
+    qjs_debug_printf(rt, "[QJS] JOB_START: pending=%d\n", pending);
 
     if (list_empty(&rt->job_list)) {
         *pctx = NULL;
+        qjs_debug_printf(rt, "[QJS] JOB_END: result=%d\n", 0);
         return 0;
     }
 
@@ -2027,6 +2045,7 @@ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
     JS_FreeValue(ctx, res);
     js_free(ctx, e);
     *pctx = ctx;
+    qjs_debug_printf(rt, "[QJS] JOB_END: result=%d\n", ret);
     return ret;
 }
 
@@ -3260,6 +3279,125 @@ static const char *JS_AtomGetStrRT(JSRuntime *rt, char *buf, int buf_size,
 static const char *JS_AtomGetStr(JSContext *ctx, char *buf, int buf_size, JSAtom atom)
 {
     return JS_AtomGetStrRT(ctx->rt, buf, buf_size, atom);
+}
+
+#define QJS_DEBUG_CALL_TRACE_LEN 20
+
+static void qjs_debug_printf(JSRuntime *rt, const char *fmt, ...)
+{
+    char buf[4096];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+#ifdef CONFIG_DEBUGGER
+    /* Best-effort: write to debug_sources/logs.txt for DLL/GUI hosts */
+    js_debugger_files_logf("%s", buf);
+#endif
+    /* Still try stderr (may be invisible depending on host). */
+    fputs(buf, stderr);
+    fflush(stderr);
+    (void)rt;
+}
+
+static inline void qjs_debug_log_depth_threshold(JSRuntime *rt, int depth,
+                                                 const char *func_str)
+{
+    if (depth == 100) {
+        qjs_debug_printf(rt, "[QJS] CALL_DEPTH_100: func=%s\n", func_str);
+    } else if (depth == 500) {
+        qjs_debug_printf(rt, "[QJS] CALL_DEPTH_500: func=%s\n", func_str);
+    } else if (depth == 1000) {
+        qjs_debug_printf(rt, "[QJS] CALL_DEPTH_1000: func=%s\n", func_str);
+    }
+}
+
+static void qjs_debug_format_func(JSRuntime *rt, JSValueConst func_obj,
+                                  char *out, int out_size)
+{
+    int tag = JS_VALUE_GET_TAG(func_obj);
+    if (tag == JS_TAG_OBJECT) {
+        JSObject *p = JS_VALUE_GET_OBJ(func_obj);
+        char cls_buf[ATOM_GET_STR_BUF_SIZE];
+        const char *cls = JS_AtomGetStrRT(rt, cls_buf, sizeof(cls_buf),
+                                         rt->class_array[p->class_id].class_name);
+        switch(p->class_id) {
+        case JS_CLASS_BYTECODE_FUNCTION:
+        case JS_CLASS_GENERATOR_FUNCTION:
+        case JS_CLASS_ASYNC_FUNCTION:
+        case JS_CLASS_ASYNC_GENERATOR_FUNCTION:
+            {
+                JSFunctionBytecode *b = p->u.func.function_bytecode;
+                char name_buf[ATOM_GET_STR_BUF_SIZE];
+                const char *name = "(anonymous)";
+                if (b && b->func_name) {
+                    name = JS_AtomGetStrRT(rt, name_buf, sizeof(name_buf),
+                                          b->func_name);
+                }
+                snprintf(out, out_size, "%s:%s", cls, name);
+            }
+            return;
+        case JS_CLASS_C_FUNCTION:
+            snprintf(out, out_size, "%s@%p(cproto=%u,magic=%d)",
+                     cls, (void *)p, (unsigned)p->u.cfunc.cproto, (int)p->u.cfunc.magic);
+            return;
+        case JS_CLASS_C_FUNCTION_DATA:
+        case JS_CLASS_BOUND_FUNCTION:
+        default:
+            snprintf(out, out_size, "%s@%p", cls, (void *)p);
+            return;
+        }
+    } else if (tag == JS_TAG_FUNCTION_BYTECODE) {
+        JSFunctionBytecode *b = JS_VALUE_GET_PTR(func_obj);
+        char name_buf[ATOM_GET_STR_BUF_SIZE];
+        const char *name = "(anonymous)";
+        if (b && b->func_name) {
+            name = JS_AtomGetStrRT(rt, name_buf, sizeof(name_buf), b->func_name);
+        }
+        snprintf(out, out_size, "bytecode:%s", name);
+    } else {
+        snprintf(out, out_size, "tag=%d", tag);
+    }
+}
+
+static void qjs_debug_call_enter(JSRuntime *rt, JSValueConst func_obj)
+{
+    char func_buf[ATOM_GET_STR_BUF_SIZE];
+    qjs_debug_format_func(rt, func_obj, func_buf, sizeof(func_buf));
+
+    rt->qjs_call_depth++;
+    qjs_debug_log_depth_threshold(rt, rt->qjs_call_depth, func_buf);
+
+    snprintf(rt->qjs_last_func, sizeof(rt->qjs_last_func), "%s", func_buf);
+    snprintf(rt->qjs_call_trace[rt->qjs_call_trace_pos],
+             sizeof(rt->qjs_call_trace[rt->qjs_call_trace_pos]),
+             "%s", func_buf);
+    rt->qjs_call_trace_pos = (rt->qjs_call_trace_pos + 1) % QJS_DEBUG_CALL_TRACE_LEN;
+    if (rt->qjs_call_trace_count < QJS_DEBUG_CALL_TRACE_LEN)
+        rt->qjs_call_trace_count++;
+}
+
+static void qjs_debug_call_leave(JSRuntime *rt)
+{
+    if (rt->qjs_call_depth > 0)
+        rt->qjs_call_depth--;
+}
+
+static void qjs_debug_dump_call_trace(JSRuntime *rt)
+{
+    uint32_t start, i;
+    qjs_debug_printf(rt, "[QJS] CALL_TRACE_BEFORE_OVERFLOW:\n");
+    start = (rt->qjs_call_trace_count == QJS_DEBUG_CALL_TRACE_LEN) ?
+        rt->qjs_call_trace_pos : 0;
+    for(i = 0; i < QJS_DEBUG_CALL_TRACE_LEN; i++) {
+        const char *s = "<empty>";
+        if (i < rt->qjs_call_trace_count) {
+            uint32_t idx = (start + i) % QJS_DEBUG_CALL_TRACE_LEN;
+            s = rt->qjs_call_trace[idx];
+        }
+        qjs_debug_printf(rt, "[QJS] -%u: %s\n", (unsigned)(QJS_DEBUG_CALL_TRACE_LEN - i), s);
+    }
 }
 
 static JSValue __JS_AtomToValue(JSContext *ctx, JSAtom atom, bool force_string)
@@ -7142,6 +7280,17 @@ JSValue JS_ThrowOutOfMemory(JSContext *ctx)
 
 static JSValue JS_ThrowStackOverflow(JSContext *ctx)
 {
+    JSRuntime *rt = ctx->rt;
+    const char *last = rt->qjs_last_func[0] ? rt->qjs_last_func : "<none>";
+    {
+        uintptr_t sp = js_get_stack_pointer();
+        qjs_debug_printf(rt,
+                         "[QJS] STACK_OVERFLOW: depth=%d, last_func=%s, sp=%p, stack_top=%p, stack_limit=%p, stack_size=%zu\n",
+                         rt->qjs_call_depth, last,
+                         (void *)sp, (void *)rt->stack_top, (void *)rt->stack_limit,
+                         (size_t)rt->stack_size);
+    }
+    qjs_debug_dump_call_trace(rt);
     return JS_ThrowRangeError(ctx, "Maximum call stack size exceeded");
 }
 
@@ -16288,9 +16437,14 @@ static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
     cproto = p->u.cfunc.cproto;
     arg_count = p->u.cfunc.length;
 
+    qjs_debug_call_enter(rt, func_obj);
+
     /* better to always check stack overflow */
-    if (js_check_stack_overflow(rt, sizeof(arg_buf[0]) * arg_count))
-        return JS_ThrowStackOverflow(ctx);
+    if (js_check_stack_overflow(rt, sizeof(arg_buf[0]) * arg_count)) {
+        ret_val = JS_ThrowStackOverflow(ctx);
+        qjs_debug_call_leave(rt);
+        return ret_val;
+    }
 
     prev_sf = rt->current_stack_frame;
     sf->prev_frame = prev_sf;
@@ -16398,6 +16552,7 @@ static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
     }
 
     rt->current_stack_frame = sf->prev_frame;
+    qjs_debug_call_leave(rt);
     return ret_val;
 }
 
@@ -16483,6 +16638,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
     size_t alloca_size;
+    int qjs_depth_pushed = 0;
 
 #ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_STEP
 #define DUMP_BYTECODE_OR_DONT(pc) \
@@ -16540,6 +16696,8 @@ const void * const * active_dispatch_table = caller_ctx->rt->debugger_info.trans
             sf = &s->frame;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
+            qjs_debug_call_enter(rt, sf->cur_func);
+            qjs_depth_pushed = 1;
             ctx = b->realm;
             var_refs = p->u.func.var_refs;
             local_buf = arg_buf = sf->arg_buf;
@@ -16570,6 +16728,8 @@ const void * const * active_dispatch_table = caller_ctx->rt->debugger_info.trans
                          argv, flags);
     }
     b = p->u.func.function_bytecode;
+    qjs_debug_call_enter(rt, func_obj);
+    qjs_depth_pushed = 1;
 
     if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
         arg_allocated_size = b->arg_count;
@@ -16579,8 +16739,12 @@ const void * const * active_dispatch_table = caller_ctx->rt->debugger_info.trans
 
     alloca_size = sizeof(JSValue) * (arg_allocated_size + b->var_count +
                                      b->stack_size);
-    if (js_check_stack_overflow(rt, alloca_size))
-        return JS_ThrowStackOverflow(caller_ctx);
+    if (js_check_stack_overflow(rt, alloca_size)) {
+        ret_val = JS_ThrowStackOverflow(caller_ctx);
+        if (qjs_depth_pushed)
+            qjs_debug_call_leave(rt);
+        return ret_val;
+    }
 
     sf->is_strict_mode = b->is_strict_mode;
     arg_buf = (JSValue *)argv;
@@ -19025,6 +19189,8 @@ const void * const * active_dispatch_table = caller_ctx->rt->debugger_info.trans
         }
     }
     rt->current_stack_frame = sf->prev_frame;
+    if (qjs_depth_pushed)
+        qjs_debug_call_leave(rt);
     return ret_val;
 }
 
@@ -29473,6 +29639,12 @@ static int js_inner_module_evaluation(JSContext *ctx, JSModuleDef *m,
 {
     JSModuleDef *m1;
     int i;
+    {
+        char buf1[ATOM_GET_STR_BUF_SIZE];
+        qjs_debug_printf(ctx->rt, "[QJS] MODULE_EVAL: name=%s, status=%d\n",
+                         JS_AtomGetStr(ctx, buf1, sizeof(buf1), m->module_name),
+                         (int)m->status);
+    }
 
     if (js_check_stack_overflow(ctx->rt, 0)) {
         JS_ThrowStackOverflow(ctx);
@@ -29586,6 +29758,12 @@ static JSValue js_evaluate_module(JSContext *ctx, JSModuleDef *m)
 {
     JSModuleDef *m1, *stack_top;
     JSValue ret_val, result;
+    {
+        char buf1[ATOM_GET_STR_BUF_SIZE];
+        qjs_debug_printf(ctx->rt, "[QJS] MODULE_EVAL: name=%s, status=%d\n",
+                         JS_AtomGetStr(ctx, buf1, sizeof(buf1), m->module_name),
+                         (int)m->status);
+    }
 
     assert(m->status == JS_MODULE_STATUS_LINKED ||
            m->status == JS_MODULE_STATUS_EVALUATING_ASYNC ||
@@ -35200,7 +35378,7 @@ static JSValue JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
         JSDebuggerFileEntry *current_eval = js_debugger_files_get_current_eval();
         if (current_eval && current_eval->filename) {
             filename = current_eval->filename;  /* Use VM#### name */
-            printf("[DEBUG] Using VM filename for runtime: %s\n", filename);
+            qjs_debug_printf(rt, "[QJS] DEBUGGER_VM_FILENAME: %s\n", filename);
         }
     } else {
         /* For regular files, try to get debug_sources path */
@@ -35213,8 +35391,22 @@ static JSValue JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     }
 #endif
     
-    return ctx->eval_internal(ctx, this_obj, input, input_len, filename, line,
-                              flags, scope_idx);
+    /* Reset instrumentation for this eval so traces aren't stale across runs/contexts. */
+    rt->qjs_call_depth = 0;
+    rt->qjs_call_trace_pos = 0;
+    rt->qjs_call_trace_count = 0;
+    rt->qjs_last_func[0] = '\0';
+    for (int i = 0; i < QJS_DEBUG_CALL_TRACE_LEN; i++) {
+        rt->qjs_call_trace[i][0] = '\0';
+    }
+
+    qjs_debug_printf(rt, "[QJS] JS_EVAL_START: len=%d, flags=%d, filename=%s\n",
+                     (int)input_len, flags, filename ? filename : "<null>");
+    JSValue qjs_eval_ret = ctx->eval_internal(ctx, this_obj, input, input_len, filename, line,
+                                              flags, scope_idx);
+    qjs_debug_printf(rt, "[QJS] JS_EVAL_END: is_exception=%d\n",
+                     JS_IsException(qjs_eval_ret));
+    return qjs_eval_ret;
 }
 
 static JSValue JS_EvalObject(JSContext *ctx, JSValueConst this_obj,
@@ -35276,8 +35468,6 @@ JSValue JS_EvalThis2(JSContext *ctx, JSValueConst this_obj,
 JSValue JS_Eval(JSContext *ctx, const char *input, size_t input_len,
                 const char *filename, int eval_flags)
 {
-    printf("JS_Eval: %s, %s, %d\n", input, filename, eval_flags);
-    
     JSEvalOptions options = {
         .version = JS_EVAL_OPTIONS_VERSION,
         .filename = filename,

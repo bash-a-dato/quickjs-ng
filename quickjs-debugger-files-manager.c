@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <errno.h>
 
@@ -641,6 +642,47 @@ void js_debugger_files_set_current_eval(JSDebuggerFileEntry *entry) {
 /* Get the current eval entry for runtime lookup */
 JSDebuggerFileEntry *js_debugger_files_get_current_eval(void) {
     return g_last_eval_entry;
+}
+
+int js_debugger_files_logf(const char *fmt, ...)
+{
+    JSDebuggerFileManager *manager = js_debugger_files_get_global();
+    if (!manager || !manager->initialized || !manager->enabled)
+        return -1;
+
+    /* Build logs path: <debug_dir>/logs.txt (make absolute if needed) */
+    char path[4096];
+    int is_absolute = 0;
+#ifdef _WIN32
+    is_absolute = (strlen(manager->debug_dir) >= 2 && manager->debug_dir[1] == ':') ||
+                  (manager->debug_dir[0] == '\\' && manager->debug_dir[1] == '\\');
+#else
+    is_absolute = (manager->debug_dir[0] == '/');
+#endif
+    if (is_absolute) {
+        snprintf(path, sizeof(path), "%s%slogs.txt", manager->debug_dir, PATH_SEPARATOR);
+    } else {
+        char cwd[4096];
+#ifdef _WIN32
+        _getcwd(cwd, sizeof(cwd));
+#else
+        getcwd(cwd, sizeof(cwd));
+#endif
+        snprintf(path, sizeof(path), "%s%s%s%slogs.txt",
+                 cwd, PATH_SEPARATOR, manager->debug_dir, PATH_SEPARATOR);
+    }
+
+    FILE *fp = fopen(path, "ab");
+    if (!fp)
+        return -1;
+
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(fp, fmt, ap);
+    va_end(ap);
+    fflush(fp);
+    fclose(fp);
+    return 0;
 }
 
 #endif /* CONFIG_DEBUGGER */
