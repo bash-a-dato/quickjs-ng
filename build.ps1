@@ -99,6 +99,8 @@ if ($Static) {
 
 if ($Debugger) {
     $CMakeOptions += "-DCONFIG_DEBUGGER=ON"
+} else {
+    $CMakeOptions += "-DCONFIG_DEBUGGER=OFF"
 }
 
 if ($Dll) {

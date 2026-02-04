@@ -703,7 +703,9 @@ typedef struct JSFunctionBytecode {
     int pc2line_len;
     uint8_t *pc2line_buf;
     char *source;
+#ifdef CONFIG_DEBUGGER
     struct JSDebuggerFunctionInfo debugger;
+#endif
 } JSFunctionBytecode;
 
 typedef struct JSBoundFunction {
@@ -34351,8 +34353,10 @@ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b)
     js_free_rt(rt, b->pc2line_buf);
     js_free_rt(rt, b->source);
 
+#ifdef CONFIG_DEBUGGER
     if (b->debugger.breakpoints)
         js_free_rt(rt, b->debugger.breakpoints);
+#endif
 
     remove_gc_object(&b->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && b->header.ref_count != 0) {
