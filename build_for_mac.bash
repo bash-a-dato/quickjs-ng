@@ -56,6 +56,7 @@ ENABLE_EXAMPLES=0
 ENABLE_DEBUGGER=0
 CLEAN_ONLY=0
 REBUILD=0
+EXTRA_C_FLAGS="-Wno-error=format-nonliteral"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -163,6 +164,7 @@ CMAKE_CONFIGURE_ARGS=(
     -DBUILD_SHARED_LIBS=ON
     -DCONFIG_DEBUGGER=OFF
     -DQJS_BUILD_EXAMPLES=OFF
+    "-DCMAKE_C_FLAGS=${EXTRA_C_FLAGS}"
 )
 
 if [[ -n "$GENERATOR" ]]; then
