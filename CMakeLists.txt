@@ -299,6 +299,10 @@ endif()
 add_library(qjs ${qjs_sources})
 target_compile_definitions(qjs PRIVATE ${qjs_defines})
 
+if(BUILD_SHARED_LIBS)
+    set_target_properties(qjs PROPERTIES C_VISIBILITY_PRESET default)
+endif()
+
 # Add additional definitions for DLL builds
 if(BUILD_SHARED_LIBS AND WIN32)
     target_compile_definitions(qjs PRIVATE JS_SHARED_LIBRARY)

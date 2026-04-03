@@ -445,7 +445,7 @@ fail:
 #pragma GCC diagnostic pop // ignored "-Wformat-nonliteral"
 #endif // __GNUC__
 
-uint8_t *js_load_file(JSContext *ctx, size_t *pbuf_len, const char *filename)
+JS_EXTERN uint8_t *js_load_file(JSContext *ctx, size_t *pbuf_len, const char *filename)
 {
     FILE *f;
     size_t n, len;
@@ -738,7 +738,7 @@ static JSModuleDef *js_module_loader_so(JSContext *ctx,
 }
 #endif /* !_WIN32 */
 
-int js_module_set_import_meta(JSContext *ctx, JSValueConst func_val,
+JS_EXTERN int js_module_set_import_meta(JSContext *ctx, JSValueConst func_val,
                               bool use_realpath, bool is_main)
 {
     JSModuleDef *m;
@@ -791,7 +791,7 @@ int js_module_set_import_meta(JSContext *ctx, JSValueConst func_val,
     return 0;
 }
 
-JSModuleDef *js_module_loader(JSContext *ctx,
+JS_EXTERN JSModuleDef *js_module_loader(JSContext *ctx,
                               const char *module_name, void *opaque)
 {
     JSModuleDef *m;
@@ -1833,7 +1833,7 @@ static int js_std_init(JSContext *ctx, JSModuleDef *m)
     return 0;
 }
 
-JSModuleDef *js_init_module_std(JSContext *ctx, const char *module_name)
+JS_EXTERN JSModuleDef *js_init_module_std(JSContext *ctx, const char *module_name)
 {
     JSModuleDef *m;
     m = JS_NewCModule(ctx, module_name, js_std_init);
@@ -4233,7 +4233,7 @@ static int js_os_init(JSContext *ctx, JSModuleDef *m)
     return JS_SetModuleExportList(ctx, m, js_os_funcs, countof(js_os_funcs));
 }
 
-JSModuleDef *js_init_module_os(JSContext *ctx, const char *module_name)
+JS_EXTERN JSModuleDef *js_init_module_os(JSContext *ctx, const char *module_name)
 {
     JSModuleDef *m;
     m = JS_NewCModule(ctx, module_name, js_os_init);
@@ -4307,7 +4307,7 @@ done:
     return JS_UNDEFINED;
 }
 
-void js_std_add_helpers(JSContext *ctx, int argc, char **argv)
+JS_EXTERN void js_std_add_helpers(JSContext *ctx, int argc, char **argv)
 {
     JSValue global_obj, console, args;
     int i;
@@ -4342,7 +4342,7 @@ static void js_std_finalize(JSRuntime *rt, void *arg)
     js_free_rt(rt, ts);
 }
 
-void js_std_init_handlers(JSRuntime *rt)
+JS_EXTERN void js_std_init_handlers(JSRuntime *rt)
 {
     JSThreadState *ts;
 
@@ -4383,7 +4383,7 @@ static void free_rp(JSRuntime *rt, JSRejectedPromiseEntry *rp)
     js_free_rt(rt, rp);
 }
 
-void js_std_free_handlers(JSRuntime *rt)
+JS_EXTERN void js_std_free_handlers(JSRuntime *rt)
 {
     JSThreadState *ts = js_get_thread_state(rt);
     struct list_head *el, *el1;
@@ -4446,7 +4446,7 @@ static void js_std_dump_error1(JSContext *ctx, JSValueConst exception_val)
     }
 }
 
-void js_std_dump_error(JSContext *ctx)
+JS_EXTERN void js_std_dump_error(JSContext *ctx)
 {
     JSValue exception_val;
 
@@ -4468,7 +4468,7 @@ static JSRejectedPromiseEntry *find_rejected_promise(JSContext *ctx, JSThreadSta
     return NULL;
 }
 
-void js_std_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
+JS_EXTERN void js_std_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
                                       JSValueConst reason,
                                       bool is_handled, void *opaque)
 {
@@ -4516,7 +4516,7 @@ static void js_std_promise_rejection_check(JSContext *ctx)
 }
 
 /* main loop which calls the user JS callbacks */
-int js_std_loop(JSContext *ctx)
+JS_EXTERN int js_std_loop(JSContext *ctx)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     JSThreadState *ts = js_get_thread_state(rt);
@@ -4546,7 +4546,7 @@ done:
 /* Wait for a promise and execute pending jobs while waiting for
    it. Return the promise result or JS_EXCEPTION in case of promise
    rejection. */
-JSValue js_std_await(JSContext *ctx, JSValue obj)
+JS_EXTERN JSValue js_std_await(JSContext *ctx, JSValue obj)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     JSThreadState *ts = js_get_thread_state(rt);
@@ -4583,7 +4583,7 @@ JSValue js_std_await(JSContext *ctx, JSValue obj)
     return ret;
 }
 
-void js_std_eval_binary(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+JS_EXTERN void js_std_eval_binary(JSContext *ctx, const uint8_t *buf, size_t buf_len,
                         int load_only)
 {
     JSValue obj, val;
@@ -4681,7 +4681,7 @@ static int js_bjson_init(JSContext *ctx, JSModuleDef *m)
                                   countof(js_bjson_funcs));
 }
 
-JSModuleDef *js_init_module_bjson(JSContext *ctx, const char *module_name)
+JS_EXTERN JSModuleDef *js_init_module_bjson(JSContext *ctx, const char *module_name)
 {
     JSModuleDef *m;
     m = JS_NewCModule(ctx, module_name, js_bjson_init);
