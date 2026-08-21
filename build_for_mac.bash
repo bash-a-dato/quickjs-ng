@@ -214,18 +214,51 @@ echo "Building libqjs.dylib..."
 echo "cmake ${CMAKE_BUILD_ARGS[*]}"
 cmake "${CMAKE_BUILD_ARGS[@]}"
 
-OUTPUT_PATH=""
-if [[ -f "$BUILD_DIR/libqjs.dylib" ]]; then
-    OUTPUT_PATH="$BUILD_DIR/libqjs.dylib"
-elif [[ -f "$BUILD_DIR/$BUILD_TYPE/libqjs.dylib" ]]; then
-    OUTPUT_PATH="$BUILD_DIR/$BUILD_TYPE/libqjs.dylib"
+# CMake with VERSION/SOVERSION creates:
+#   libqjs.dylib -> libqjs.0.dylib -> libqjs.0.x.y.dylib (real Mach-O)
+# Copying the symlink to Windows (or zipping without -y) turns it into a
+# ~14 byte text file containing "libqjs.0.dylib", which Delphi then deploys
+# and dyld rejects as "slice is not valid mach-o file".
+find_built_dylib() {
+    local candidate
+    for candidate in \
+        "$BUILD_DIR/libqjs.dylib" \
+        "$BUILD_DIR/$BUILD_TYPE/libqjs.dylib" \
+        "$BUILD_DIR"/libqjs.*.dylib \
+        "$BUILD_DIR/$BUILD_TYPE"/libqjs.*.dylib
+    do
+        if [[ -e "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+SYMLINK_OR_REAL="$(find_built_dylib || true)"
+DEPLOY_DIR="${SCRIPT_DIR}/dist-macos-${ARCH}"
+DEPLOY_PATH="${DEPLOY_DIR}/libqjs.dylib"
+mkdir -p "$DEPLOY_DIR"
+
+if [[ -z "$SYMLINK_OR_REAL" ]]; then
+    echo "Build finished but libqjs*.dylib was not found under: $BUILD_DIR" >&2
+    exit 1
 fi
+
+# -L follows symlinks so DEPLOY_PATH is always a real Mach-O binary.
+cp -fL "$SYMLINK_OR_REAL" "$DEPLOY_PATH"
 
 echo
 echo "Build completed successfully."
-if [[ -n "$OUTPUT_PATH" ]]; then
-    echo "Output: $OUTPUT_PATH"
-else
-    echo "Output should be under: $BUILD_DIR"
+echo "Built (may be symlink): $SYMLINK_OR_REAL"
+echo "Deployable (real file): $DEPLOY_PATH"
+if command -v lipo >/dev/null 2>&1; then
+    echo "Architectures     : $(lipo -archs "$DEPLOY_PATH")"
 fi
-echo "For Delphi FMX, deploy libqjs.dylib into the app bundle Frameworks folder."
+if command -v file >/dev/null 2>&1; then
+    file "$DEPLOY_PATH"
+fi
+echo
+echo "Copy THIS file into Delphi deploy source (e.g. adato_multiplatform/libqjs.dylib):"
+echo "  $DEPLOY_PATH"
+echo "Do not copy the symlink from the build directory."
